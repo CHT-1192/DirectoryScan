@@ -18,11 +18,11 @@ static int disp_width(const char *s) {
 }
 
 /* ---- ANSI 16-color escape codes ---- */
-#define CLS          "\033[H\033[J"
-#define COLOR_GREEN  "\033[32m"
-#define COLOR_CYAN   "\033[36m"
-#define COLOR_RED    "\033[31m"
-#define COLOR_RESET  "\033[0m"
+#define COLOR_GREEN     "\033[32m"
+#define COLOR_CYAN      "\033[36m"
+#define COLOR_RED       "\033[31m"
+#define COLOR_YELLOW    "\033[33m"
+#define COLOR_RESET     "\033[0m"
 
 /* ---- layout constants ---- */
 #define LINE_COUNT_WIDTH 9
@@ -37,7 +37,61 @@ static const char *change_color(int change_type) {
     case CHANGE_CREATED:  return COLOR_GREEN;
     case CHANGE_MODIFIED: return COLOR_CYAN;
     case CHANGE_DELETED:  return COLOR_RED;
+    case CHANGE_RENAMED:  return COLOR_YELLOW;
     default:              return NULL;
+    }
+}
+
+/* ---- line buffer for diff-based rendering ---- */
+
+#define MAX_LINES 4096
+#define MAX_LINE_LEN 256
+
+static char (*g_line_buf)[MAX_LINE_LEN] = NULL;
+static int   g_line_count = 0;
+
+static char (*g_prev_lines)[MAX_LINE_LEN] = NULL;
+static int   g_prev_count = 0;
+
+static void flush_display(int first_run) {
+    if (first_run) {
+        /* full render on first display */
+        printf("\033[H\033[J");
+        for (int i = 0; i < g_line_count; i++) {
+            printf("%s\n", g_line_buf[i]);
+        }
+        fflush(stdout);
+    } else {
+        /* diff against previous frame */
+        int max_lines = g_line_count > g_prev_count ? g_line_count : g_prev_count;
+
+        for (int i = 0; i < max_lines; i++) {
+            int has_new = (i < g_line_count);
+            int has_old = (i < g_prev_count);
+            int changed = 0;
+
+            if (has_new && has_old) {
+                changed = (strcmp(g_line_buf[i], g_prev_lines[i]) != 0);
+            } else if (has_new != has_old) {
+                changed = 1;
+            }
+
+            if (changed) {
+                if (has_new) {
+                    printf("\033[%d;1H\033[K%s", i + 1, g_line_buf[i]);
+                } else {
+                    printf("\033[%d;1H\033[K", i + 1);
+                }
+            }
+        }
+        fflush(stdout);
+    }
+
+    /* save current as previous */
+    g_prev_count = g_line_count;
+    for (int i = 0; i < g_line_count; i++) {
+        memcpy(g_prev_lines[i], g_line_buf[i], MAX_LINE_LEN);
+        g_prev_lines[i][MAX_LINE_LEN - 1] = '\0';
     }
 }
 
@@ -110,6 +164,33 @@ int compute_name_width(Entry *root) {
 
 /* ---- internal: format one tree entry line ---- */
 
+/* append to line buffer. buf must point into g_line_buf[g_line_count] */
+static void line_append(const char *s) {
+    char *buf = g_line_buf[g_line_count];
+    int len = (int)strlen(buf);
+    if (len < MAX_LINE_LEN - 1) {
+        snprintf(buf + len, MAX_LINE_LEN - len, "%s", s);
+    }
+}
+
+static void line_append_pad(int count) {
+    char *buf = g_line_buf[g_line_count];
+    int len = (int)strlen(buf);
+    for (int i = 0; i < count && len + i < MAX_LINE_LEN - 1; i++) {
+        buf[len + i] = ' ';
+    }
+    int new_len = len + count;
+    if (new_len >= MAX_LINE_LEN) new_len = MAX_LINE_LEN - 1;
+    buf[new_len] = '\0';
+}
+
+static void line_done(void) {
+    g_line_count++;
+    if (g_line_count < MAX_LINES) {
+        g_line_buf[g_line_count][0] = '\0';
+    }
+}
+
 static void print_entry(Entry *e, int depth, const int *is_last,
                         int name_width, time_t now, int first_run) {
     char prefix[256];
@@ -141,51 +222,54 @@ static void print_entry(Entry *e, int depth, const int *is_last,
         snprintf(time_str, sizeof(time_str), "--:--");
     }
 
-    /* name column (manual padding for UTF-8 column width) */
+    /* name column */
     int dw = disp_width(display_name);
-    if (color) printf("%s", color);
-    printf("%s", display_name);
-    for (int i = dw; i < name_width; i++) putchar(' ');
-    if (color) printf(COLOR_RESET);
+    if (color) line_append(color);
+    line_append(display_name);
+    line_append_pad(name_width - dw);
+    if (color) line_append(COLOR_RESET);
 
     /* time */
-    printf("%s", SPACER);
-    if (color) printf("%s", color);
-    printf("%s", time_str);
-    if (color) printf(COLOR_RESET);
+    line_append(SPACER);
+    if (color) line_append(color);
+    line_append(time_str);
+    if (color) line_append(COLOR_RESET);
 
     /* line count / MAX DEPTH / binary */
     if (e->is_dir) {
         if (e->line_count == LINES_MAXDEPTH) {
-            printf("%s", SPACER);
-            printf(COLOR_RED "MAX DEPTH" COLOR_RESET);
+            line_append(SPACER);
+            line_append(COLOR_RED "MAX DEPTH" COLOR_RESET);
         }
     } else {
+        char num_buf[32];
         if (e->line_count == LINES_BINARY) {
-            printf("%s%*s", SPACER, LINE_COUNT_WIDTH, "");
+            snprintf(num_buf, sizeof(num_buf), "%s%*s", SPACER, LINE_COUNT_WIDTH, "");
         } else {
-            printf("%s", SPACER);
-            if (color) printf("%s", color);
-            printf("%*ld", LINE_COUNT_WIDTH, e->line_count);
-            if (color) printf(COLOR_RESET);
+            snprintf(num_buf, sizeof(num_buf), "%s%*ld", SPACER, LINE_COUNT_WIDTH, e->line_count);
         }
+        if (color) line_append(color);
+        line_append(num_buf);
+        if (color) line_append(COLOR_RESET);
 
         /* size */
         char size_buf[16];
         format_size(e->size, size_buf, sizeof(size_buf));
-        printf("%s", GAP_SIZE);
-        if (color) printf("%s", color);
-        printf("%*s", SIZE_WIDTH, size_buf);
-        if (color) printf(COLOR_RESET);
+        char gap_buf[32];
+        snprintf(gap_buf, sizeof(gap_buf), "%s%*s", GAP_SIZE, SIZE_WIDTH, size_buf);
+        if (color) line_append(color);
+        line_append(gap_buf);
+        if (color) line_append(COLOR_RESET);
     }
 
-    printf("\n");
+    line_done();
 }
 
 /* ---- internal: render deleted entries ---- */
 
 static void print_deleted(DeletedEntry *del, int name_width,
                           time_t now, int first_run) {
+    if (!del) return;
     Config *cfg = config_get();
     int duration = cfg ? cfg->change_highlight_secs : DEFAULT_CHANGE_HIGHLIGHT_SECS;
 
@@ -199,18 +283,18 @@ static void print_deleted(DeletedEntry *del, int name_width,
             snprintf(display_name, sizeof(display_name), "%s", d->name);
         }
 
-        if (highlight) printf(COLOR_RED);
-        printf("%s", display_name);
+        if (highlight) line_append(COLOR_RED);
+        line_append(display_name);
         int dw = disp_width(display_name);
-        for (int i = dw; i < name_width; i++) putchar(' ');
-        if (highlight) printf(COLOR_RESET);
+        line_append_pad(name_width - dw);
+        if (highlight) line_append(COLOR_RESET);
 
-        printf("%s", SPACER);
-        if (highlight) printf(COLOR_RED);
-        printf("(deleted)");
-        if (highlight) printf(COLOR_RESET);
+        line_append(SPACER);
+        if (highlight) line_append(COLOR_RED);
+        line_append("(deleted)");
+        if (highlight) line_append(COLOR_RESET);
 
-        printf("\n");
+        line_done();
     }
 }
 
@@ -235,14 +319,30 @@ static void render_walk(Entry *e, int depth, int *is_last,
 
 /* ---- public API ---- */
 
+void display_enter(void) {
+    g_line_buf = malloc(MAX_LINES * MAX_LINE_LEN);
+    g_prev_lines = malloc(MAX_LINES * MAX_LINE_LEN);
+    printf("\033[?1049h\033[?25l");  /* alt screen + hide cursor */
+    fflush(stdout);
+}
+
+void display_exit(void) {
+    printf("\033[0m\033[?25h\033[?1049l");  /* reset colors + show cursor + normal screen */
+    fflush(stdout);
+    free(g_line_buf);  g_line_buf = NULL;
+    free(g_prev_lines); g_prev_lines = NULL;
+}
+
 void display_tree(Entry *root, time_t now, int first_run,
                   int name_width, DeletedEntry *deleted) {
-    printf("%s", CLS);
-
     if (name_width <= 0) {
         name_width = compute_name_width(root);
     }
     if (name_width < 20) name_width = 20;
+
+    /* reset line buffer */
+    g_line_count = 0;
+    g_line_buf[0][0] = '\0';
 
     int is_last[16] = {0};
 
@@ -256,8 +356,10 @@ void display_tree(Entry *root, time_t now, int first_run,
         child_idx++;
     }
 
-    /* render deleted entries at the bottom */
     if (deleted) {
         print_deleted(deleted, name_width, now, first_run);
     }
+
+    /* diff and flush to terminal */
+    flush_display(first_run);
 }

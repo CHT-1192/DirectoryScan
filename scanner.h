@@ -13,6 +13,7 @@
 #define CHANGE_CREATED   1
 #define CHANGE_MODIFIED  2
 #define CHANGE_DELETED   3
+#define CHANGE_RENAMED   4
 
 typedef struct Entry {
     char *name;           /* file/directory name (without path) */

@@ -515,6 +515,63 @@ static Entry *merge_sorted(Entry *prev, Entry *curr, time_t now) {
     return head;
 }
 
+/* ---- rename detection: match deleted + created entries by size ---- */
+
+typedef struct {
+    Entry *entry;
+    int used;
+} MatchEntry;
+
+static void collect_by_type(Entry *e, int wanted_type,
+                            MatchEntry **arr, int *count, int *cap) {
+    if (!e) return;
+    if (e->change_type == wanted_type) {
+        if (*count >= *cap) {
+            *cap = *cap ? *cap * 2 : 16;
+            *arr = realloc(*arr, *cap * sizeof(MatchEntry));
+        }
+        (*arr)[*count].entry = e;
+        (*arr)[*count].used = 0;
+        (*count)++;
+    }
+    collect_by_type(e->child, wanted_type, arr, count, cap);
+    collect_by_type(e->next, wanted_type, arr, count, cap);
+}
+
+static void match_renames(Entry *root) {
+    /* collect deleted entries (old name) and created entries (new name) */
+    MatchEntry *deleted = NULL, *created = NULL;
+    int nd = 0, nc = 0, cap = 0;
+
+    collect_by_type(root, CHANGE_DELETED, &deleted, &nd, &cap);
+    cap = 0;
+    collect_by_type(root, CHANGE_CREATED, &created, &nc, &cap);
+
+    /* match by size + mtime + line_count: same size, same mtime, same type
+     * (file/dir), and same line count (for non-binary files) → rename. */
+    for (int d = 0; d < nd; d++) {
+        if (deleted[d].used) continue;
+        for (int c = 0; c < nc; c++) {
+            if (created[c].used) continue;
+            Entry *de = deleted[d].entry;
+            Entry *ce = created[c].entry;
+            if (de->size == ce->size &&
+                de->mtime == ce->mtime &&
+                de->is_dir == ce->is_dir &&
+                de->line_count == ce->line_count) {
+                de->change_type = CHANGE_RENAMED;
+                ce->change_type = CHANGE_RENAMED;
+                deleted[d].used = 1;
+                created[c].used = 1;
+                break;
+            }
+        }
+    }
+
+    free(deleted);
+    free(created);
+}
+
 /* Build a display tree by merging previous tree with new scan.
  * prev_root may be NULL (first run).
  * Returns a new tree that includes deleted entries in-place.
@@ -531,6 +588,9 @@ Entry *merge_display_tree(Entry *prev_root, Entry *new_root, time_t now) {
 
     /* update new_root's children to the merged list */
     new_root->child = merged_children;
+
+    /* match deleted+created pairs by size+mtime → rename (yellow) */
+    match_renames(new_root);
 
     /* carry over root change info if any */
     if (prev_root->change_time > 0) {

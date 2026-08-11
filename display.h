@@ -15,4 +15,10 @@ void display_tree(Entry *root, time_t now, int first_run,
 /* Compute the maximum display width (tree prefix + name + deleted names). */
 int compute_name_width(Entry *root);
 
+/* Enter alternate screen buffer (preserves scrollback). Call on startup. */
+void display_enter(void);
+
+/* Exit alternate screen buffer, restore cursor. Call on exit. */
+void display_exit(void);
+
 #endif

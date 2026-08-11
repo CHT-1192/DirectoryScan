@@ -1,80 +1,98 @@
 # DirectoryScan
 
-Terminal directory tree viewer with live change detection. Scans a directory recursively, displays its structure with file metadata (modification time, line count, size), and watches for changes — re-rendering only when something changes and highlighting modified entries in green.
+Terminal directory tree viewer with live change detection. Scans a directory recursively, displays file metadata (time, line count, size), and watches for changes — re-rendering with diff-based partial updates and three-color highlighting.
 
 ```
 CLAUDE.md             11:18         89        4KiB
-config.c              11:16        495       14KiB
-LICENSE               11:50         16        1KiB
-README.md             11:50         30        1KiB
 src/                  11:18
 ├─display.c           11:49        216        7KiB
-├─display.h           09:55         16        1KiB
-├─fileutil.c          10:28         81        2KiB
-├─fileutil.h          09:57         20        1KiB
-├─main.c              11:15        145        4KiB
 ├─scanner.c           11:15        406       11KiB
-├─scanner.h           11:12         33        1KiB
-├─watcher.c           11:14        131        4KiB
-╰─watcher.h           09:54         33        1KiB
+╰─watcher.c           11:14        131        4KiB
 ```
 
 ## Features
 
-- Recursive directory tree with Unicode box-drawing characters
-- Live monitoring — re-renders only on file changes (mtime/size)
-- Changed entries highlighted in green (duration configurable)
+- Recursive directory tree with Unicode box-drawing characters (`├─` `│ ` `╰─`)
+- **Diff-based rendering** — only changed lines are redrawn, no flicker
+- **Alternate screen buffer** — scrollback is preserved on exit
+- **Three-color change highlighting** (configurable duration):
+  - <span style="color:green">●</span> Green — created
+  - <span style="color:cyan">●</span> Cyan — modified
+  - <span style="color:red">●</span> Red — deleted (stays in-place)
+  - <span style="color:yellow">●</span> Yellow — renamed
+- **NTFS USN Journal** (Windows, Admin) — exact rename detection, skip scan on idle
 - Line counting for text files, binary file detection
 - Adaptive file sizes (KiB / MiB)
-- Configurable recursion depth (default: 4), shows `MAX DEPTH` in red
-- Configurable blacklist/whitelist with wildcard patterns
-- Hidden file filtering (Windows attribute + dot-prefix), with whitelist overrides
-- Cross-platform: Windows (UTF-8, GBK path support) and Unix
+- Configurable recursion depth, `MAX DEPTH` in red at limit
+- Blacklist / whitelist with gitignore-style wildcard patterns
+- Hidden file filtering (Windows attribute + dot-prefix)
+- Full UTF-8 support (GBK path conversion on Chinese Windows)
+- Cross-platform: Windows and Unix
 
 ## Build
 
 ```sh
-# One-shot compile
 gcc -Wall -Wextra -std=gnu11 -O2 -o DirectoryScan *.c
-
-# Or with mingw32-make
 mingw32-make
 ```
 
 ## Install
 
 ```sh
-mingw32-make install                    # → ~/bin (Windows), /usr/local/bin (Unix)
-mingw32-make install PREFIX=/opt/tools  # custom location
+mingw32-make install                     # → ~/bin (Windows), /usr/local/bin (Unix)
+mingw32-make install PREFIX=/opt/tools
 ```
 
 ## Usage
 
 ```sh
-DirectoryScan                  # scan current directory
-DirectoryScan /path/to/scan    # scan specific path
+DirectoryScan                         # current directory
+DirectoryScan C:\path\to\scan         # specific path
+
+# USN Journal mode (exact rename detection, Admin required)
+DirectoryScan C:\path                 # run as Administrator
+
+# With NSudo (TrustedInstaller)
+NSudoLC.exe -U:T -P:E DirectoryScan C:\path
 ```
 
 ## Configuration
 
-`DSConfig.jsonc` (JSON with comments) is auto-generated in the executable's directory on first run:
+`DSConfig.jsonc` — auto-generated next to the executable on first run:
 
 ```jsonc
 {
-    "max_depth": 4,                // recursion depth
-    "change_highlight_secs": 3,    // green highlight duration
-    "scan_interval_ms": 2000,      // polling interval
-    "blacklist": [                 // hide non-hidden entries
-        "node_modules/",
-        "*.o"
-    ],
-    "whitelist": [                 // show hidden entries
-        ".gitignore"
-    ]
+    "max_depth": 4,
+    "change_highlight_secs": 3,
+    "scan_interval_ms": 2000,
+    "blacklist": [],
+    "whitelist": []
 }
 ```
 
-**Pattern syntax:** `*` matches any sequence. Patterns without `/` match filename; with `/` match relative path. Trailing `/` matches directories only.
+| Key | Description |
+|---|---|
+| `max_depth` | Recursion depth |
+| `change_highlight_secs` | Highlight duration (seconds) |
+| `scan_interval_ms` | Polling interval (milliseconds) |
+| `blacklist` | Patterns to hide (non-hidden entries) |
+| `whitelist` | Patterns to show (hidden entries only) |
+
+**Pattern syntax** (gitignore-like): `*` wildcard. No `/` → match filename; with `/` → match relative path. Trailing `/` → directories only.
+
+## Testing
+
+```sh
+# Terminal 1
+DirectoryScan ./test/
+
+# Terminal 2 — random stress test (create/modify/delete/rename)
+python test.py ./test/
+```
+
+## Logs
+
+`DirectoryScan.log` is written to the executable's directory. Includes startup/config info and USN Journal status.
 
 ## License
 

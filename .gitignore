@@ -1,3 +1,4 @@
 *.o
 DirectoryScan.exe
 DSConfig.jsonc
+DirectoryScan.log

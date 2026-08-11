@@ -3,7 +3,7 @@ CFLAGS = -Wall -Wextra -std=gnu11 -O2
 LDFLAGS =
 
 TARGET = DirectoryScan
-OBJS = main.o scanner.o display.o watcher.o fileutil.o config.o
+OBJS = main.o scanner.o display.o watcher.o fileutil.o config.o usnwatcher.o log.o
 
 # Install paths
 ifeq ($(OS),Windows_NT)

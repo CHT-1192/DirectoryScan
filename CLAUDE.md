@@ -30,16 +30,18 @@ Uses `-std=gnu11` for POSIX extensions (`strdup`, etc.).
 
 ## Architecture
 
-Eight C modules, each with a `.h` / `.c` pair plus `main.c`:
+Ten C modules, each with a `.h` / `.c` pair plus `main.c`:
 
 | Module | Responsibility |
 |---|---|
 | `config` | JSONC parser, wildcard pattern matching, blacklist/whitelist filtering. Reads `DSConfig.jsonc` from exe directory; auto-generates default on first run. |
-| `scanner` | Recursive directory traversal, tree building (`Entry` struct), sorting (dirs before files, case-insensitive alpha). Uses runtime `max_depth` from config. |
-| `fileutil` | Binary file detection (null byte + non-printable ratio), line counting, human-readable size formatting (KiB/MiB adaptive). |
-| `display` | Terminal rendering with Unicode box-drawing chars (`├─`, `│ `, `╰─`), ANSI color codes (green for changes, red for MAX DEPTH), column alignment. |
-| `watcher` | Flat snapshot of `(path, mtime, size)` per entry. Compares snapshots to detect changes, marks tree entries with `change_time`. |
-| `main` | Argument parsing, ANSI + UTF-8 enable on Windows, main loop: scan → detect changes → display if needed. |
+| `scanner` | Recursive directory traversal, tree building (`Entry` struct), sorting (dirs before files, case-insensitive alpha). Tree merge for change display, four-factor rename detection. |
+| `fileutil` | Binary file detection, line counting, size formatting (KiB/MiB adaptive). |
+| `display` | Terminal rendering with Unicode box-drawing, ANSI 16-color codes (green/cyan/red/yellow), UTF-8 column-width alignment, diff-based partial refresh, alternate screen buffer. |
+| `watcher` | Snapshot comparison change detection (fallback when USN unavailable). |
+| `usnwatcher` | NTFS USN Journal reader — exact rename detection, incremental change polling. Requires Admin + NTFS. |
+| `log` | Timestamped logging to `DirectoryScan.log` in exe directory. |
+| `main` | Dual-mode loop: USN Journal (preferred) or snapshot fallback. Signal handling, console setup. |
 
 ## Configuration (`DSConfig.jsonc`)
 
