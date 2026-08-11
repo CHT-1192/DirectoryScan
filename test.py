@@ -7,7 +7,7 @@ Usage:  python test_changes.py <target_dir>
 
 import os, sys, time, random, shutil
 
-TARGET = sys.argv[1] if len(sys.argv) > 1 else "./test_scan"
+TARGET = sys.argv[1] if len(sys.argv) > 1 else "./test/"
 
 def rand_interval():
     return random.choice([1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])
