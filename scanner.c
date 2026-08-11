@@ -6,6 +6,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 #define PATH_SEP '\\'
@@ -474,8 +478,9 @@ static Entry *merge_sorted(Entry *prev, Entry *curr, time_t now) {
         }
 
         if (cmp < 0) {
-            /* prev entry not in curr → deleted (or already was deleted) */
-            if (prev->change_type == CHANGE_DELETED) {
+            /* prev entry not in curr → deleted or renamed-away */
+            if (prev->change_type == CHANGE_DELETED ||
+                prev->change_type == CHANGE_RENAMED) {
                 if (now - prev->change_time < duration) {
                     Entry *cl = clone_entry(prev);
                     cl->child = merge_sorted(prev->child, NULL, now);
@@ -507,7 +512,8 @@ static Entry *merge_sorted(Entry *prev, Entry *curr, time_t now) {
                 curr->change_time = now;
             } else if (prev->change_type == CHANGE_DELETED ||
                        prev->change_type == CHANGE_CREATED ||
-                       prev->change_type == CHANGE_MODIFIED) {
+                       prev->change_type == CHANGE_MODIFIED ||
+                       prev->change_type == CHANGE_RENAMED) {
                 /* carry over existing highlight */
                 curr->change_type = prev->change_type;
                 curr->change_time = prev->change_time;
@@ -557,7 +563,6 @@ static int count_tree_entries(Entry *e) {
     if (!e) return 0;
     int n = 1;
     for (Entry *c = e->child; c; c = c->next) n += count_tree_entries(c);
-    for (Entry *s = e->next; s; s = s->next) n += count_tree_entries(s);
     return n;
 }
 

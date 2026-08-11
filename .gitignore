@@ -2,3 +2,4 @@
 DirectoryScan.exe
 DSConfig.jsonc
 DirectoryScan.log
+*.exe

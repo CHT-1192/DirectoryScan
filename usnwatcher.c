@@ -9,8 +9,7 @@
 
 /* ---- USN Journal data types (compatible with MinGW) ---- */
 
-/* USN_JOURNAL_DATA_V0 is the 64-bit version used since Win2000 */
-#ifndef USN_JOURNAL_DATA_V0
+/* USN types — always use our own with correct sizes */
 typedef struct {
     DWORDLONG UsnJournalID;
     USN       FirstUsn;
@@ -19,10 +18,8 @@ typedef struct {
     USN       MaxUsn;
     DWORDLONG MaximumSize;
     DWORDLONG AllocationDelta;
-} USN_JOURNAL_DATA_V0;
-#endif
+} UsnJournalData;
 
-#ifndef READ_USN_JOURNAL_DATA_V0
 typedef struct {
     USN       StartUsn;
     DWORD     ReasonMask;
@@ -30,8 +27,7 @@ typedef struct {
     DWORDLONG Timeout;
     DWORDLONG BytesToWaitFor;
     DWORDLONG UsnJournalID;
-} READ_USN_JOURNAL_DATA_V0;
-#endif
+} UsnReadJournalData;
 
 /* ---- FRN → path mapping ---- */
 
@@ -127,6 +123,7 @@ static void frn_map_from_tree(Entry *e, const char *parent_path) {
 
 static HANDLE g_hVol = INVALID_HANDLE_VALUE;
 static DWORDLONG g_next_usn = 0;
+static DWORDLONG g_journal_id = 0;
 static int g_usn_available = 0;
 
 static BOOL enable_backup_privilege(void) {
@@ -170,6 +167,32 @@ static HANDLE open_volume(const char *vol) {
                         FILE_FLAG_BACKUP_SEMANTICS, NULL);
     }
     return h;
+}
+
+/* ---- change list tracking ---- */
+
+static UsnChangeList g_changes = {NULL, 0};
+
+static void changes_add(const char *path, int change_type,
+                         const char *rename_old, const char *rename_new) {
+    g_changes.changes = realloc(g_changes.changes,
+        (g_changes.count + 1) * sizeof(UsnChange));
+    UsnChange *ch = &g_changes.changes[g_changes.count++];
+    ch->path = strdup(path);
+    ch->change_type = change_type;
+    ch->rename_old = rename_old ? strdup(rename_old) : NULL;
+    ch->rename_new = rename_new ? strdup(rename_new) : NULL;
+}
+
+static void changes_clear(void) {
+    for (int i = 0; i < g_changes.count; i++) {
+        free(g_changes.changes[i].path);
+        free(g_changes.changes[i].rename_old);
+        free(g_changes.changes[i].rename_new);
+    }
+    free(g_changes.changes);
+    g_changes.changes = NULL;
+    g_changes.count = 0;
 }
 
 /* ---- rename tracking ---- */
@@ -217,7 +240,7 @@ static int pending_take(DWORDLONG frn, char **old_name, char **parent_path) {
         if (g_pending[i].frn == frn) {
             *old_name = g_pending[i].old_name;
             *parent_path = g_pending[i].parent_path;
-            free(g_pending[i].parent_path); /* already consumed, just free */
+            /* move last into this slot, don't free — caller frees */
             g_pending[i] = g_pending[--g_pending_count];
             return 1;
         }
@@ -251,8 +274,6 @@ static void renames_clear(void) {
 
 /* ---- public API ---- */
 
-/* ---- public API ---- */
-
 #include "log.h"
 
 int usnwatcher_init(const char *scan_path) {
@@ -272,7 +293,7 @@ int usnwatcher_init(const char *scan_path) {
     }
 
     /* query journal to get baseline */
-    USN_JOURNAL_DATA_V0 ujd = {0};
+    UsnJournalData ujd = {0};
     DWORD bytes;
     if (!DeviceIoControl(g_hVol, FSCTL_QUERY_USN_JOURNAL,
                          NULL, 0, &ujd, sizeof(ujd), &bytes, NULL)) {
@@ -283,8 +304,10 @@ int usnwatcher_init(const char *scan_path) {
         return 0;
     }
     g_next_usn = ujd.NextUsn;
+    g_journal_id = ujd.UsnJournalID;
     g_usn_available = 1;
-    log_info("USN: journal active, next USN = %llu", (unsigned long long)g_next_usn);
+    log_info("USN: journal active, id=%llu, next USN=%llu",
+             (unsigned long long)g_journal_id, (unsigned long long)g_next_usn);
     return 1;
 }
 
@@ -321,33 +344,43 @@ int usnwatcher_read_changes(const char *scan_path, time_t now) {
 
     pending_clear();
     renames_clear();
+    changes_clear();
     int changes = 0;
-
     /* read USN records */
     DWORD buf_size = 256 * 1024;
     USN_RECORD *buf = malloc(buf_size);
     if (!buf) return 0;
 
-    READ_USN_JOURNAL_DATA_V0 rujd = {0};
+    UsnReadJournalData rujd = {0};
     rujd.StartUsn = g_next_usn;
     rujd.ReasonMask = 0xFFFFFFFF;
     rujd.ReturnOnlyOnClose = 0;
     rujd.Timeout = 0;
     rujd.BytesToWaitFor = 0;
-    rujd.UsnJournalID = 0;
+    rujd.UsnJournalID = g_journal_id;
 
     DWORD bytes = 0;
-    if (!DeviceIoControl(g_hVol, FSCTL_READ_USN_JOURNAL,
-                         &rujd, sizeof(rujd), buf, buf_size, &bytes, NULL)) {
-        if (GetLastError() == ERROR_HANDLE_EOF) {
-            free(buf);
-            return 0; /* no new records */
-        }
+    BOOL ok = DeviceIoControl(g_hVol, FSCTL_READ_USN_JOURNAL,
+                              &rujd, sizeof(rujd), buf, buf_size, &bytes, NULL);
+    if (!ok) {
+        DWORD err = GetLastError();
+        log_info("USN: read error %lu (sizeof rujd=%zu, buf=%lu, StartUsn=%llu)",
+                 err, sizeof(rujd), buf_size, (unsigned long long)g_next_usn);
         free(buf);
         return 0;
     }
+    /* FSCTL_READ_USN_JOURNAL succeeds even when empty — returns 8-byte
+     * next-USN header with no records. Check for this case. */
+    if (bytes == sizeof(USN)) {
+        g_next_usn = *(USN *)buf;
+        free(buf);
+        return 0; /* no new records */
+    }
 
-    /* walk records */
+    /* walk records. Handle both V2 (USN_RECORD) and V3 (USN_RECORD_V3).
+     * V3 uses 128-bit file IDs; on NTFS upper 8 bytes are typically 0,
+     * but the struct offset of FileReferenceNumber shifts by 8 bytes
+     * because MajorVersion/MinorVersion were added BEFORE it. */
     DWORD offset = 0;
     while (offset < bytes) {
         USN_RECORD *rec = (USN_RECORD *)((BYTE *)buf + offset);
@@ -371,15 +404,30 @@ int usnwatcher_read_changes(const char *scan_path, time_t now) {
         char full_path[1024];
         snprintf(full_path, sizeof(full_path), "%s\\%s", parent_path, name_utf8);
 
+        /* compute relative path from scan root */
+        int root_len = (int)strlen(scan_path);
+        const char *rel = full_path;
+        if (strncmp(full_path, scan_path, root_len) == 0) {
+            rel = full_path + root_len;
+            if (*rel == '\\') rel++;
+        }
+
         if (reason & USN_REASON_RENAME_OLD_NAME) {
             pending_add(frn, name_utf8, parent_path);
+            changes_add(rel, CHANGE_DELETED, name_utf8, NULL);
+            log_info("USN: RENAME_OLD %s", rel);
             changes++;
         }
         else if (reason & USN_REASON_RENAME_NEW_NAME) {
             char *old_name = NULL, *old_parent = NULL;
             if (pending_take(frn, &old_name, &old_parent)) {
                 renames_add(parent_path, old_name, name_utf8);
+                changes_add(rel, CHANGE_RENAMED, old_name, name_utf8);
+                log_info("USN: RENAME %s -> %s", old_name, name_utf8);
                 free(old_name);
+            } else {
+                changes_add(rel, CHANGE_CREATED, NULL, NULL);
+                log_warn("USN: RENAME_NEW unpaired %s", rel);
             }
             frn_map_set(frn, full_path,
                 (rec->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0);
@@ -387,16 +435,19 @@ int usnwatcher_read_changes(const char *scan_path, time_t now) {
         }
         else if (reason & USN_REASON_FILE_DELETE) {
             frn_map_remove(frn);
+            changes_add(rel, CHANGE_DELETED, NULL, NULL);
             changes++;
         }
         else if (reason & USN_REASON_FILE_CREATE) {
             frn_map_set(frn, full_path,
                 (rec->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0);
+            changes_add(rel, CHANGE_CREATED, NULL, NULL);
             changes++;
         }
         else if (reason & (USN_REASON_DATA_OVERWRITE |
                             USN_REASON_DATA_EXTEND |
                             USN_REASON_DATA_TRUNCATION)) {
+            changes_add(rel, CHANGE_MODIFIED, NULL, NULL);
             changes++;
         }
 
@@ -408,6 +459,16 @@ int usnwatcher_read_changes(const char *scan_path, time_t now) {
     return changes;
 }
 
+void usnwatcher_skip_noise(void) {
+    if (g_hVol == INVALID_HANDLE_VALUE) return;
+    UsnJournalData ujd = {0};
+    DWORD bytes;
+    if (DeviceIoControl(g_hVol, FSCTL_QUERY_USN_JOURNAL,
+                         NULL, 0, &ujd, sizeof(ujd), &bytes, NULL)) {
+        g_next_usn = ujd.NextUsn;
+    }
+}
+
 RenameGroup *usnwatcher_get_renames(void) {
     return g_renames;
 }
@@ -415,6 +476,15 @@ RenameGroup *usnwatcher_get_renames(void) {
 void usnwatcher_free_renames(RenameGroup *groups) {
     (void)groups;
     renames_clear();
+}
+
+UsnChangeList *usnwatcher_get_changes(void) {
+    return &g_changes;
+}
+
+void usnwatcher_free_changes(UsnChangeList *list) {
+    (void)list;
+    changes_clear();
 }
 
 #endif /* _WIN32 */

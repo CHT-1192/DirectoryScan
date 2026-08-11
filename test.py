@@ -148,7 +148,7 @@ def action_symlink():
 
 ACTIONS = [
     (action_create_file,  18),
-    (action_create_dir,   12),
+    (action_create_dir,   18),
     (action_modify,       32),
     (action_delete,       12),
     (action_rename,        8),

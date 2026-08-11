@@ -325,12 +325,12 @@ static void render_walk(Entry *e, int depth, int *is_last,
 void display_enter(void) {
     g_line_buf = malloc(MAX_LINES * MAX_LINE_LEN);
     g_prev_lines = malloc(MAX_LINES * MAX_LINE_LEN);
-    printf("\033[?1049h\033[?25l");  /* alt screen + hide cursor */
+    printf("\033[?25l");  /* hide cursor */
     fflush(stdout);
 }
 
 void display_exit(void) {
-    printf("\033[0m\033[?25h\033[?1049l");  /* reset colors + show cursor + normal screen */
+    printf("\033[0m\033[?25h");  /* reset colors + show cursor */
     fflush(stdout);
     free(g_line_buf);  g_line_buf = NULL;
     free(g_prev_lines); g_prev_lines = NULL;

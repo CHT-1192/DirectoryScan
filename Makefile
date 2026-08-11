@@ -1,9 +1,15 @@
-CC = gcc
+CC ?= gcc
 CFLAGS = -Wall -Wextra -std=gnu11 -O2
 LDFLAGS =
 
 TARGET = DirectoryScan
 OBJS = main.o scanner.o display.o watcher.o fileutil.o config.o usnwatcher.o log.o hash.o
+
+# clang on Windows (MSVC target) needs extra flags
+ifeq ($(findstring clang,$(CC)),clang)
+    CFLAGS  += -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_WARNINGS
+    LDFLAGS += -ladvapi32
+endif
 
 # Install paths
 ifeq ($(OS),Windows_NT)

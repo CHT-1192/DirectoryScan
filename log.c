@@ -74,7 +74,7 @@ void log_init(void) {
 #endif
     free(exe_dir);
 
-    g_logfile = fopen(log_path, "a");
+    g_logfile = fopen(log_path, "w");
     free(log_path);
 }
 
