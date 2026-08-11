@@ -76,56 +76,42 @@ int main(int argc, char *argv[]) {
         scan_path = "."; /* default: current directory */
     }
 
-    FileInfo *prev_snapshot = NULL;
-    int prev_count = 0;
+    Entry *prev_tree = NULL;
     int first_run = 1;
     time_t last_display_time = 0;
 
     while (1) {
         time_t now = time(NULL);
 
-        /* prune expired deleted entries */
-        watcher_prune_deleted(now);
-
-        /* 1. scan directory tree completely */
-        Entry *root = scan_directory(scan_path, 0);
-        if (!root) {
+        /* 1. scan current directory tree */
+        Entry *new_tree = scan_directory(scan_path, 0);
+        if (!new_tree) {
             fprintf(stderr, "Error: cannot scan directory '%s'\n", scan_path);
             free(utf8_path);
+            free_entries(prev_tree);
             return 1;
         }
 
-        /* build current snapshot */
-        int new_count = 0;
-        FileInfo *new_snapshot = build_snapshot(root, scan_path, &new_count);
+        /* 2. merge with previous tree (deleted entries stay in-place) */
+        Entry *display_tree_root = merge_display_tree(prev_tree, new_tree, now);
 
+        /* 3. check if we need to re-render */
         int needs_display = 0;
-        DeletedEntry *deleted = watcher_get_deleted();
-
-        if (first_run || !prev_snapshot) {
+        if (first_run) {
             needs_display = 1;
-        } else {
-            int changes = detect_changes(prev_snapshot, prev_count,
-                                         new_snapshot, new_count, now);
-            if (changes > 0) {
-                needs_display = 1;
-            } else if (has_relevant_highlight(root, deleted, now, last_display_time)) {
-                needs_display = 1;
-            }
+        } else if (has_relevant_highlight(display_tree_root, NULL, now, last_display_time)) {
+            needs_display = 1;
         }
 
         if (needs_display) {
-            /* 2. compute column widths AFTER scanning is complete */
-            int name_width = compute_name_width(root);
-            /* 3. render the tree + deleted entries */
-            display_tree(root, now, first_run, name_width, deleted);
+            int name_width = compute_name_width(display_tree_root);
+            display_tree(display_tree_root, now, first_run, name_width, NULL);
             last_display_time = now;
         }
 
-        /* replace previous snapshot */
-        free_snapshot(prev_snapshot, prev_count);
-        prev_snapshot = new_snapshot;
-        prev_count = new_count;
+        /* 4. rotate trees for next iteration */
+        free_entries(prev_tree);
+        prev_tree = display_tree_root;
 
         first_run = 0;
 
@@ -133,7 +119,7 @@ int main(int argc, char *argv[]) {
     }
 
     free(utf8_path);
-    free_snapshot(prev_snapshot, prev_count);
+    free_entries(prev_tree);
     config_free(cfg);
     return 0;
 }

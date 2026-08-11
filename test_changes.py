@@ -8,7 +8,9 @@ Usage:  python test_changes.py <target_dir>
 import os, sys, time, random, shutil
 
 TARGET = sys.argv[1] if len(sys.argv) > 1 else "./test_scan"
-INTERVAL = 2.5
+
+def rand_interval():
+    return random.choice([1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])
 
 
 def ensure_dir(path):
@@ -130,10 +132,10 @@ def action_rename():
 # ── weighted action table ───────────────────────────────────────────
 
 ACTIONS = [
-    (action_create_file,  20),
+    (action_create_file,  18),
     (action_create_dir,   12),
-    (action_modify,       25),
-    (action_delete,       25),
+    (action_modify,       35),
+    (action_delete,       12),
     (action_rename,        8),
 ]
 
@@ -153,7 +155,7 @@ def weighted_choice():
 def main():
     print(f"DirectoryScan random stress test")
     print(f"Target: {os.path.abspath(TARGET)}")
-    print(f"Interval: {INTERVAL}s")
+    print(f"Interval: 1.0–5.0s (0.5s steps)")
     print(f"Run DirectoryScan {os.path.abspath(TARGET)} in another terminal")
     print(f"Press Ctrl+C to stop\n")
 
@@ -170,7 +172,7 @@ def main():
             for _ in range(random.randint(0, 2)):
                 weighted_choice()()
 
-            time.sleep(INTERVAL)
+            time.sleep(rand_interval())
     except KeyboardInterrupt:
         log(f"Stopped after {count} actions. Cleaning up...")
         shutil.rmtree(TARGET, ignore_errors=True)

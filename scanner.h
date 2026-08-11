@@ -37,4 +37,10 @@ Entry *scan_directory(const char *path, int depth);
 /* Free all memory allocated for an entry tree. */
 void free_entries(Entry *root);
 
+/* Merge previous display tree with new scan result.
+ * Deleted entries stay in their original tree position (shown in red).
+ * prev_root may be NULL on first run.
+ * The returned tree owns new_root; caller must also free prev_root. */
+Entry *merge_display_tree(Entry *prev_root, Entry *new_root, time_t now);
+
 #endif

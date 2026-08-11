@@ -393,7 +393,7 @@ static Entry *scan_internal(const char *path, const char *rel_dir, int depth) {
 /* ---- public API ---- */
 
 Entry *scan_directory(const char *path, int depth) {
-    (void)depth; /* depth tracking handled internally via scan_internal */
+    (void)depth;
     return scan_internal(path, "", 0);
 }
 
@@ -403,4 +403,140 @@ void free_entries(Entry *e) {
     free_entries(e->child);
     free(e->name);
     free(e);
+}
+
+/* ---- tree merge for change display ---- */
+
+/* shallow clone: copy all fields except next and child pointers */
+static Entry *clone_entry(const Entry *src) {
+    if (!src) return NULL;
+    Entry *e = calloc(1, sizeof(Entry));
+    if (!e) return NULL;
+    e->name = strdup(src->name);
+    e->is_dir = src->is_dir;
+    e->mtime = src->mtime;
+    e->line_count = src->line_count;
+    e->size = src->size;
+    e->change_time = src->change_time;
+    e->change_type = src->change_type;
+    e->next = NULL;
+    e->child = NULL;
+    return e;
+}
+
+/* append entry to end of linked list */
+static void append_entry(Entry **head, Entry **tail, Entry *e) {
+    if (!*head) { *head = e; *tail = e; }
+    else { (*tail)->next = e; *tail = e; }
+}
+
+/* Merge two sorted entry lists (prev and curr) into a display tree.
+ * prev may contain CHANGE_DELETED entries from previous merges.
+ * Deleted entries past highlight duration are dropped.
+ * Entries only in curr → CHANGE_CREATED.
+ * Entries in both with different mtime/size → CHANGE_MODIFIED.
+ * Entries only in prev → cloned as CHANGE_DELETED.
+ * For directories, children are recursively merged. */
+static Entry *merge_sorted(Entry *prev, Entry *curr, time_t now) {
+    Config *cfg = config_get();
+    int duration = cfg ? cfg->change_highlight_secs : DEFAULT_CHANGE_HIGHLIGHT_SECS;
+    Entry *head = NULL, *tail = NULL;
+
+    while (prev || curr) {
+        int cmp;
+        if (!prev) {
+            cmp = 1;
+        } else if (!curr) {
+            cmp = -1;
+        } else {
+            if (prev->is_dir != curr->is_dir)
+                cmp = curr->is_dir - prev->is_dir;
+            else
+#ifdef _WIN32
+                cmp = _stricmp(prev->name, curr->name);
+#else
+                cmp = strcasecmp(prev->name, curr->name);
+#endif
+        }
+
+        if (cmp < 0) {
+            /* prev entry not in curr → deleted (or already was deleted) */
+            if (prev->change_type == CHANGE_DELETED) {
+                if (now - prev->change_time < duration) {
+                    Entry *cl = clone_entry(prev);
+                    cl->child = merge_sorted(prev->child, NULL, now);
+                    append_entry(&head, &tail, cl);
+                }
+                /* else: highlight expired, drop it */
+            } else {
+                Entry *cl = clone_entry(prev);
+                cl->change_type = CHANGE_DELETED;
+                cl->change_time = now;
+                cl->child = merge_sorted(prev->child, NULL, now);
+                append_entry(&head, &tail, cl);
+            }
+            prev = prev->next;
+
+        } else if (cmp > 0) {
+            /* curr entry not in prev → created */
+            curr->change_type = CHANGE_CREATED;
+            curr->change_time = now;
+            Entry *nxt = curr->next;
+            curr->next = NULL;
+            append_entry(&head, &tail, curr);
+            curr = nxt;
+
+        } else {
+            /* exists in both */
+            if (prev->mtime != curr->mtime || prev->size != curr->size) {
+                curr->change_type = CHANGE_MODIFIED;
+                curr->change_time = now;
+            } else if (prev->change_type == CHANGE_DELETED ||
+                       prev->change_type == CHANGE_CREATED ||
+                       prev->change_type == CHANGE_MODIFIED) {
+                /* carry over existing highlight */
+                curr->change_type = prev->change_type;
+                curr->change_time = prev->change_time;
+            }
+            /* merge children for directories */
+            if (curr->is_dir) {
+                Entry *merged_children = merge_sorted(
+                    prev->child, curr->child, now);
+                curr->child = merged_children;
+            }
+            Entry *nxt = curr->next;
+            curr->next = NULL;
+            append_entry(&head, &tail, curr);
+            curr = nxt;
+            prev = prev->next;
+        }
+    }
+
+    return head;
+}
+
+/* Build a display tree by merging previous tree with new scan.
+ * prev_root may be NULL (first run).
+ * Returns a new tree that includes deleted entries in-place.
+ * Caller owns the returned tree. */
+Entry *merge_display_tree(Entry *prev_root, Entry *new_root, time_t now) {
+    if (!prev_root) {
+        /* first run: just return new_root as-is */
+        return new_root;
+    }
+
+    /* merge children of both roots */
+    Entry *merged_children = merge_sorted(
+        prev_root->child, new_root->child, now);
+
+    /* update new_root's children to the merged list */
+    new_root->child = merged_children;
+
+    /* carry over root change info if any */
+    if (prev_root->change_time > 0) {
+        new_root->change_time = prev_root->change_time;
+        new_root->change_type = prev_root->change_type;
+    }
+
+    return new_root;
 }

@@ -5,8 +5,20 @@
 #include <string.h>
 #include <time.h>
 
+/* ---- internal: count display columns for UTF-8 strings ---- */
+/* UTF-8 continuation bytes (0x80-0xBF) add 0 columns;
+ * lead bytes and ASCII add 1 column each. */
+static int disp_width(const char *s) {
+    int w = 0;
+    while (*s) {
+        if (((unsigned char)*s & 0xC0) != 0x80) w++;
+        s++;
+    }
+    return w;
+}
+
 /* ---- ANSI 16-color escape codes ---- */
-#define CLS          "\033[2J\033[H"
+#define CLS          "\033[H\033[J"
 #define COLOR_GREEN  "\033[32m"
 #define COLOR_CYAN   "\033[36m"
 #define COLOR_RED    "\033[31m"
@@ -66,7 +78,7 @@ static void name_width_walk(Entry *e, int depth, int *is_last, int *max_width) {
         snprintf(display_name, sizeof(display_name), "%s%s", prefix, e->name);
     }
 
-    int w = (int)strlen(display_name);
+    int w = disp_width(display_name);
     if (w > *max_width) *max_width = w;
 
     int child_idx = 0;
@@ -129,9 +141,11 @@ static void print_entry(Entry *e, int depth, const int *is_last,
         snprintf(time_str, sizeof(time_str), "--:--");
     }
 
-    /* name column */
+    /* name column (manual padding for UTF-8 column width) */
+    int dw = disp_width(display_name);
     if (color) printf("%s", color);
-    printf("%-*s", name_width, display_name);
+    printf("%s", display_name);
+    for (int i = dw; i < name_width; i++) putchar(' ');
     if (color) printf(COLOR_RESET);
 
     /* time */
@@ -186,7 +200,9 @@ static void print_deleted(DeletedEntry *del, int name_width,
         }
 
         if (highlight) printf(COLOR_RED);
-        printf("%-*s", name_width, display_name);
+        printf("%s", display_name);
+        int dw = disp_width(display_name);
+        for (int i = dw; i < name_width; i++) putchar(' ');
         if (highlight) printf(COLOR_RESET);
 
         printf("%s", SPACER);
