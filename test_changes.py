@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""DirectoryScan change-detection test suite.
-Run this alongside DirectoryScan to verify three-color highlighting:
-  green  = created,  cyan = modified,  red = deleted
+"""DirectoryScan change-detection stress test.
+Randomly interleaves create / modify / delete / rename operations.
 
 Usage:  python test_changes.py <target_dir>
 """
 
-import os, sys, time, random, shutil, string
+import os, sys, time, random, shutil
 
 TARGET = sys.argv[1] if len(sys.argv) > 1 else "./test_scan"
-INTERVAL = 2.5  # slightly longer than scan_interval_ms to guarantee detection
+INTERVAL = 2.5
 
 
 def ensure_dir(path):
@@ -24,196 +23,156 @@ def log(msg):
     print(f"  [{time.strftime('%H:%M:%S')}] {msg}")
 
 
-# ── phase 1: create files ──────────────────────────────────────────
-
-def phase_create_files():
-    log("=== PHASE 1: Create files ===")
-
-    # flat files
-    for _ in range(4):
-        p = os.path.join(TARGET, rand_name("file"))
-        with open(p, "w") as f:
-            f.write("\n".join(f"line {i}" for i in range(random.randint(3, 10))))
-        log(f"CREATE  {p}")
-    time.sleep(INTERVAL)
-
-    # nested directory + files
-    d1 = os.path.join(TARGET, rand_name("dir"))
-    os.makedirs(d1, exist_ok=True)
-    log(f"CREATE  {d1}/")
-
-    for _ in range(3):
-        p = os.path.join(d1, rand_name("nested"))
-        with open(p, "w") as f:
-            f.write("\n".join(f"nested line {i}" for i in range(5)))
-        log(f"CREATE  {p}")
-    time.sleep(INTERVAL)
-
-    # deeper: dir/subdir/files
-    d2 = os.path.join(d1, rand_name("subdir"))
-    os.makedirs(d2, exist_ok=True)
-    log(f"CREATE  {d2}/")
-
-    for _ in range(2):
-        p = os.path.join(d2, rand_name("deep"))
-        with open(p, "w") as f:
-            f.write("deep content\n" * 3)
-        log(f"CREATE  {p}")
-    time.sleep(INTERVAL)
-
-
-# ── phase 2: modify files ──────────────────────────────────────────
-
-def phase_modify_files():
-    log("=== PHASE 2: Modify files ===")
-
-    # collect all files in target tree
-    all_files = []
+def all_items(types="both"):
+    """Walk target tree, yield (root, name, is_dir)."""
     for root, dirs, files in os.walk(TARGET):
-        for fn in files:
-            all_files.append(os.path.join(root, fn))
+        if types in ("both", "dirs"):
+            for d in dirs:
+                yield (root, d, True)
+        if types in ("both", "files"):
+            for fn in files:
+                yield (root, fn, False)
 
-    if not all_files:
-        log("(no files to modify)")
-        return
 
-    # add lines to some files
-    for p in random.sample(all_files, min(3, len(all_files))):
-        with open(p, "a") as f:
-            f.write("\n".join(f"appended {i}" for i in range(random.randint(1, 4))) + "\n")
-        log(f"MODIFY  {p}  (+lines)")
+def action_create_file():
+    d = random.choice([TARGET] + [os.path.join(TARGET, r[1]) for r in all_items("dirs")]) if random.random() < 0.4 else TARGET
+    ensure_dir(d)
+    p = os.path.join(d, rand_name("file"))
+    lines = random.randint(1, 10)
+    with open(p, "w") as f:
+        f.write("\n".join(f"line {i}" for i in range(lines)) + "\n")
+    log(f"CREATE  {p}  ({lines} lines)")
 
-    time.sleep(INTERVAL)
 
-    # modify inline content in some files
-    for p in random.sample(all_files, min(3, len(all_files))):
-        try:
+def action_create_dir():
+    parent = random.choice([TARGET] + [os.path.join(TARGET, r[1]) for r in all_items("dirs")]) if random.random() < 0.3 else TARGET
+    ensure_dir(parent)
+    p = os.path.join(parent, rand_name("dir"))
+    os.makedirs(p, exist_ok=True)
+    log(f"CREATE  {p}/")
+    # maybe add a file inside
+    if random.random() < 0.6:
+        fp = os.path.join(p, rand_name("nested"))
+        with open(fp, "w") as f:
+            f.write("nested content\n" * random.randint(1, 3))
+        log(f"CREATE  {fp}")
+
+
+def action_delete():
+    items = list(all_items())
+    if not items:
+        return action_create_file()
+    root, name, is_dir = random.choice(items)
+    p = os.path.join(root, name)
+    try:
+        if is_dir:
+            shutil.rmtree(p)
+            log(f"DELETE  {p}/")
+        else:
+            os.remove(p)
+            log(f"DELETE  {p}")
+    except OSError:
+        pass
+
+
+def action_modify():
+    items = list(all_items("files"))
+    if not items:
+        return action_create_file()
+    root, name, _ = random.choice(items)
+    p = os.path.join(root, name)
+
+    kind = random.choice(["append", "inline", "delete_line"])
+    try:
+        if kind == "append":
+            with open(p, "a") as f:
+                f.write("\n".join(f"appended {i}" for i in range(random.randint(1, 4))) + "\n")
+            log(f"MODIFY  {p}  (+lines)")
+
+        elif kind == "inline":
             with open(p, "r") as f:
                 lines = f.readlines()
             if lines:
                 idx = random.randint(0, len(lines) - 1)
-                lines[idx] = f"[MODIFIED at {time.strftime('%H:%M:%S')}] {lines[idx].strip()}\n"
+                lines[idx] = f"[MOD {time.strftime('%H:%M:%S')}] {lines[idx].strip()}\n"
             with open(p, "w") as f:
                 f.writelines(lines)
             log(f"MODIFY  {p}  (inline)")
-        except Exception:
-            pass
 
-    time.sleep(INTERVAL)
-
-    # delete lines from some files
-    for p in random.sample(all_files, min(3, len(all_files))):
-        try:
+        else:  # delete_line
             with open(p, "r") as f:
                 lines = f.readlines()
-            if len(lines) > 2:
-                cut = random.randint(1, len(lines) - 1)
-                keep = lines[:cut]
+            if len(lines) > 1:
+                del lines[random.randint(0, len(lines) - 1)]
                 with open(p, "w") as f:
-                    f.writelines(keep)
-                log(f"MODIFY  {p}  (-lines, {len(lines)} -> {len(keep)})")
-        except Exception:
-            pass
+                    f.writelines(lines)
+                log(f"MODIFY  {p}  (-line)")
 
-    time.sleep(INTERVAL)
-
-
-# ── phase 3: rename files / dirs ───────────────────────────────────
-
-def phase_rename():
-    log("=== PHASE 3: Rename files/dirs ===")
-
-    all_items = []
-    for root, dirs, files in os.walk(TARGET):
-        for d in dirs:
-            all_items.append((root, d, True))
-        for fn in files:
-            all_items.append((root, fn, False))
-
-    if not all_items:
-        log("(no items to rename)")
-        return
-
-    # rename a few items
-    for _ in range(min(3, len(all_items))):
-        root, name, is_dir = random.choice(all_items)
-        old = os.path.join(root, name)
-        new_name = rand_name("renamed", "/" if is_dir else ".txt").rstrip("/")
-        new = os.path.join(root, new_name)
-        try:
-            os.rename(old, new)
-            what = "dir" if is_dir else "file"
-            log(f"RENAME  {old}  ->  {new_name}  ({what})")
-        except OSError as e:
-            log(f"RENAME FAIL  {old}: {e}")
-
-    time.sleep(INTERVAL)
+    except OSError:
+        pass
 
 
-# ── phase 4: delete files ──────────────────────────────────────────
+def action_rename():
+    items = list(all_items())
+    if not items:
+        return action_create_file()
+    root, name, is_dir = random.choice(items)
+    old = os.path.join(root, name)
+    new_name = rand_name("renamed", "" if is_dir else ".txt")
+    new = os.path.join(root, new_name)
+    try:
+        os.rename(old, new)
+        log(f"RENAME  {name}  ->  {new_name}")
+    except OSError:
+        pass
 
-def phase_delete():
-    log("=== PHASE 4: Delete files ===")
 
-    all_items = []
-    for root, dirs, files in os.walk(TARGET):
-        for d in dirs:
-            all_items.append((root, d, True))
-        for fn in files:
-            all_items.append((root, fn, False))
+# ── weighted action table ───────────────────────────────────────────
 
-    if not all_items:
-        log("(no items to delete)")
-        return
+ACTIONS = [
+    (action_create_file,  20),
+    (action_create_dir,   12),
+    (action_modify,       25),
+    (action_delete,       25),
+    (action_rename,        8),
+]
 
-    # delete files first (so dirs still have contents to delete later)
-    files_only = [(r, n, False) for r, n, d in all_items if not d]
-    dirs_only = [(r, n, True) for r, n, d in all_items if d]
 
-    for root, name, _ in random.sample(files_only, min(4, len(files_only))):
-        p = os.path.join(root, name)
-        os.remove(p)
-        log(f"DELETE  {p}")
-
-    time.sleep(INTERVAL)
-
-    # delete directories (with contents)
-    for root, name, _ in random.sample(dirs_only, min(2, len(dirs_only))):
-        p = os.path.join(root, name)
-        shutil.rmtree(p)
-        log(f"DELETE  {p}/  (+ contents)")
-
-    time.sleep(INTERVAL)
+def weighted_choice():
+    total = sum(w for _, w in ACTIONS)
+    r = random.randint(1, total)
+    for fn, w in ACTIONS:
+        r -= w
+        if r <= 0:
+            return fn
+    return ACTIONS[-1][0]
 
 
 # ── main ────────────────────────────────────────────────────────────
 
 def main():
-    print(f"DirectoryScan test runner")
+    print(f"DirectoryScan random stress test")
     print(f"Target: {os.path.abspath(TARGET)}")
     print(f"Interval: {INTERVAL}s")
     print(f"Run DirectoryScan {os.path.abspath(TARGET)} in another terminal")
     print(f"Press Ctrl+C to stop\n")
 
     ensure_dir(TARGET)
-
-    phases = [
-        phase_create_files,
-        phase_modify_files,
-        phase_rename,
-        phase_delete,
-        phase_create_files,   # create again — should show green
-        phase_modify_files,
-        phase_delete,
-    ]
+    count = 0
 
     try:
         while True:
-            for phase in phases:
-                phase()
-                time.sleep(INTERVAL)
+            fn = weighted_choice()
+            fn()
+            count += 1
+
+            # batch 1-3 actions per interval for more visual impact
+            for _ in range(random.randint(0, 2)):
+                weighted_choice()()
+
+            time.sleep(INTERVAL)
     except KeyboardInterrupt:
-        log("Stopped. Cleaning up...")
+        log(f"Stopped after {count} actions. Cleaning up...")
         shutil.rmtree(TARGET, ignore_errors=True)
         log("Done.")
 
