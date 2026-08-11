@@ -1,0 +1,33 @@
+index.html                    20:32   17    1KiB
+LICENSE                       20:33   18    1KiB
+package-lock.json             20:31  825   25KiB
+package.json                  20:30   15    1KiB
+README.md                     20:56   32    1KiB
+src/                          20:53
+├─engine/                     20:51
+│ ├─analytical.ts             20:51  138    4KiB
+│ ├─rayBudget.ts              20:37   21    1KiB
+│ ├─rayTracer.ts              20:51  264    8KiB
+│ ╰─shadow.ts                 20:37   33    1KiB
+├─geometry/                   20:53
+│ ├─curves.ts                 20:52  179    6KiB
+│ ├─intersections.ts          20:52  303    9KiB
+│ ├─spatialIndex.ts           20:52  101    3KiB
+│ ├─tangents.ts               20:53  161    5KiB
+│ ╰─vec.ts                    20:34   51    2KiB
+├─main.ts                     20:53  148    4KiB
+├─render/                     20:53
+│ ╰─renderer.ts               20:53  197    5KiB
+├─styles.css                  20:40  208    4KiB
+├─svg/                        20:53
+│ ├─defaultSvg.ts             20:35    3    1KiB
+│ ├─pathParser.ts             20:53  314   10KiB
+│ ╰─svgParser.ts              20:53  266    9KiB
+├─types.ts                    20:34   93    3KiB
+╰─ui/                         21:06
+  ├─dom.ts                    20:39   56    1KiB
+  ├─hud.ts                    20:40   58    2KiB
+  ├─interactions.ts           21:06   39    1KiB
+  ├─svgEditor.ts              20:40   75    2KiB
+  ╰─transformControls.ts      20:40   39    1KiB
+tsconfig.json                 20:30   24    1KiB
