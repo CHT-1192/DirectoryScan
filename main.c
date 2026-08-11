@@ -84,6 +84,9 @@ int main(int argc, char *argv[]) {
     while (1) {
         time_t now = time(NULL);
 
+        /* prune expired deleted entries */
+        watcher_prune_deleted(now);
+
         /* 1. scan directory tree completely */
         Entry *root = scan_directory(scan_path, 0);
         if (!root) {
@@ -97,6 +100,7 @@ int main(int argc, char *argv[]) {
         FileInfo *new_snapshot = build_snapshot(root, scan_path, &new_count);
 
         int needs_display = 0;
+        DeletedEntry *deleted = watcher_get_deleted();
 
         if (first_run || !prev_snapshot) {
             needs_display = 1;
@@ -105,7 +109,7 @@ int main(int argc, char *argv[]) {
                                          new_snapshot, new_count, now);
             if (changes > 0) {
                 needs_display = 1;
-            } else if (has_relevant_highlight(root, now, last_display_time)) {
+            } else if (has_relevant_highlight(root, deleted, now, last_display_time)) {
                 needs_display = 1;
             }
         }
@@ -113,8 +117,8 @@ int main(int argc, char *argv[]) {
         if (needs_display) {
             /* 2. compute column widths AFTER scanning is complete */
             int name_width = compute_name_width(root);
-            /* 3. render the tree */
-            display_tree(root, now, first_run, name_width);
+            /* 3. render the tree + deleted entries */
+            display_tree(root, now, first_run, name_width, deleted);
             last_display_time = now;
         }
 

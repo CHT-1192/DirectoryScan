@@ -8,6 +8,12 @@
 #define LINES_BINARY    -1  /* binary file, no line count shown */
 #define LINES_MAXDEPTH  -2  /* directory at max depth, show "MAX DEPTH" */
 
+/* Change types for highlighting */
+#define CHANGE_NONE      0
+#define CHANGE_CREATED   1
+#define CHANGE_MODIFIED  2
+#define CHANGE_DELETED   3
+
 typedef struct Entry {
     char *name;           /* file/directory name (without path) */
     int is_dir;           /* 1 if directory, 0 if file */
@@ -15,6 +21,7 @@ typedef struct Entry {
     long line_count;      /* LINES_BINARY, LINES_MAXDEPTH, or >=0 */
     long size;            /* file size in bytes; 0 for directories */
     time_t change_time;   /* when last change was detected, 0 = never */
+    int change_type;      /* CHANGE_NONE / _CREATED / _MODIFIED / _DELETED */
     struct Entry *next;   /* next sibling */
     struct Entry *child;  /* first child (NULL for files) */
 } Entry;
