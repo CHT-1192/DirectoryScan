@@ -7,6 +7,7 @@
 /* Sentinel values for line_count */
 #define LINES_BINARY    -1  /* binary file, no line count shown */
 #define LINES_MAXDEPTH  -2  /* directory at max depth, show "MAX DEPTH" */
+#define LINES_SYMLINK   -3  /* symlink / junction, show "SYMLINK DETECTED" */
 
 /* Change types for highlighting */
 #define CHANGE_NONE      0
@@ -21,6 +22,7 @@ typedef struct Entry {
     time_t mtime;         /* last modified time */
     long line_count;      /* LINES_BINARY, LINES_MAXDEPTH, or >=0 */
     long size;            /* file size in bytes; 0 for directories */
+    char *sha1;           /* SHA-1 hex (40 chars), or NULL */
     time_t change_time;   /* when last change was detected, 0 = never */
     int change_type;      /* CHANGE_NONE / _CREATED / _MODIFIED / _DELETED */
     struct Entry *next;   /* next sibling */
@@ -43,5 +45,9 @@ void free_entries(Entry *root);
  * prev_root may be NULL on first run.
  * The returned tree owns new_root; caller must also free prev_root. */
 Entry *merge_display_tree(Entry *prev_root, Entry *new_root, time_t now);
+
+/* Hash files in tree for rename detection (snapshot mode).
+ * Respects config limits (hash_enabled, hash_max_size_mib, hash_max_files). */
+void scan_hash_files(Entry *root, const char *scan_path);
 
 #endif

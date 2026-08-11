@@ -18,7 +18,7 @@
 #endif
 
 /* fallback; actual value from config if available */
-#define FALLBACK_SCAN_INTERVAL_MS 2000
+#define FALLBACK_SCAN_INTERVAL_MS 500
 
 static volatile sig_atomic_t g_running = 1;
 
@@ -156,6 +156,9 @@ int main(int argc, char *argv[]) {
             /* build FRN map after first scan (USN mode only) */
             if (usn_mode && first_run)
                 usnwatcher_build_frn_map(new_tree, scan_path);
+
+            /* hash files for rename detection (snapshot mode) */
+            scan_hash_files(new_tree, scan_path);
 
             /* 2. merge with previous tree */
             Entry *display_tree_root = merge_display_tree(prev_tree, new_tree, now);

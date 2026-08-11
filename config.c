@@ -124,7 +124,16 @@ static const char *DEFAULT_CONFIG_JSON =
     "    \"change_highlight_secs\": 3,\n"
     "\n"
     "    // Polling interval between scans (milliseconds)\n"
-    "    \"scan_interval_ms\": 2000,\n"
+    "    \"scan_interval_ms\": 500,\n"
+    "\n"
+    "    // SHA-1 hash for rename detection (snapshot mode only)\n"
+    "    \"hash_enabled\": true,\n"
+    "    // Max file size for hashing (MiB), 0 = no limit\n"
+    "    \"hash_max_size_mib\": 10,\n"
+    "    // Max displayed files to enable hashing, 0 = no limit\n"
+    "    \"hash_max_files\": 100,\n"
+    "    // Thread pool size for parallel hashing (1-2)\n"
+    "    \"hash_threads\": 2,\n"
     "\n"
     "    // Blacklist patterns - non-hidden entries matching these are excluded\n"
     "    // Patterns without / match filename; with / match relative path\n"
@@ -253,6 +262,25 @@ static Token lex(Parser *p) {
     case ':': p->pos++; return make_token(TOK_COLON);
     case ',': p->pos++; return make_token(TOK_COMMA);
 
+    case 't':
+        if (p->pos + 3 < p->len &&
+            p->json[p->pos+1] == 'r' && p->json[p->pos+2] == 'u' && p->json[p->pos+3] == 'e') {
+            p->pos += 4;
+            Token t = {TOK_NUMBER, NULL, 1};
+            return t;
+        }
+        p->pos++;
+        return lex(p);
+    case 'f':
+        if (p->pos + 4 < p->len &&
+            p->json[p->pos+1] == 'a' && p->json[p->pos+2] == 'l' && p->json[p->pos+3] == 's' && p->json[p->pos+4] == 'e') {
+            p->pos += 5;
+            Token t = {TOK_NUMBER, NULL, 0};
+            return t;
+        }
+        p->pos++;
+        return lex(p);
+
     case '"': {
         /* parse string with escape sequences */
         p->pos++; /* skip opening " */
@@ -353,6 +381,14 @@ static int parse_object(Parser *p, Config *cfg) {
                 cfg->change_highlight_secs = (int)t.ival;
             else if (strcmp(key.sval, "scan_interval_ms") == 0)
                 cfg->scan_interval_ms = (int)t.ival;
+            else if (strcmp(key.sval, "hash_max_size_mib") == 0)
+                cfg->hash_max_size_mib = (int)t.ival;
+            else if (strcmp(key.sval, "hash_max_files") == 0)
+                cfg->hash_max_files = (int)t.ival;
+            else if (strcmp(key.sval, "hash_threads") == 0)
+                cfg->hash_threads = (int)t.ival;
+            else if (strcmp(key.sval, "hash_enabled") == 0)
+                cfg->hash_enabled = (int)t.ival;
         } else if (t.type == TOK_LBRACKET) {
             if (strcmp(key.sval, "blacklist") == 0)
                 parse_array(p, &cfg->blacklist, &cfg->blacklist_count);
@@ -441,6 +477,10 @@ Config *config_load(void) {
     cfg->max_depth = DEFAULT_MAX_DEPTH;
     cfg->change_highlight_secs = DEFAULT_CHANGE_HIGHLIGHT_SECS;
     cfg->scan_interval_ms = DEFAULT_SCAN_INTERVAL_MS;
+    cfg->hash_enabled = 1;
+    cfg->hash_max_size_mib = 10;
+    cfg->hash_max_files = 100;
+    cfg->hash_threads = 2;
     cfg->blacklist = NULL;
     cfg->blacklist_count = 0;
     cfg->whitelist = NULL;

@@ -65,6 +65,10 @@ NSudoLC.exe -U:T -P:E DirectoryScan C:\path
     "max_depth": 4,
     "change_highlight_secs": 3,
     "scan_interval_ms": 2000,
+    "hash_enabled": true,
+    "hash_max_size_mib": 10,
+    "hash_max_files": 100,
+    "hash_threads": 2,
     "blacklist": [],
     "whitelist": []
 }
@@ -75,6 +79,10 @@ NSudoLC.exe -U:T -P:E DirectoryScan C:\path
 | `max_depth` | Recursion depth |
 | `change_highlight_secs` | Highlight duration (seconds) |
 | `scan_interval_ms` | Polling interval (milliseconds) |
+| `hash_enabled` | Enable SHA-1 rename detection |
+| `hash_max_size_mib` | Max file size for hashing (MiB), 0 = no limit |
+| `hash_max_files` | Max files to hash, 0 = no limit; exceeded → fall back to fast check |
+| `hash_threads` | Thread pool size (1–2) |
 | `blacklist` | Patterns to hide (non-hidden entries) |
 | `whitelist` | Patterns to show (hidden entries only) |
 

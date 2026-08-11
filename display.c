@@ -235,8 +235,11 @@ static void print_entry(Entry *e, int depth, const int *is_last,
     line_append(time_str);
     if (color) line_append(COLOR_RESET);
 
-    /* line count / MAX DEPTH / binary */
-    if (e->is_dir) {
+    /* line count / MAX DEPTH / SYMLINK / binary */
+    if (e->line_count == LINES_SYMLINK) {
+        line_append(SPACER);
+        line_append(COLOR_RED "SYMLINK DETECTED" COLOR_RESET);
+    } else if (e->is_dir) {
         if (e->line_count == LINES_MAXDEPTH) {
             line_append(SPACER);
             line_append(COLOR_RED "MAX DEPTH" COLOR_RESET);

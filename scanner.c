@@ -1,5 +1,6 @@
 #include "scanner.h"
 #include "fileutil.h"
+#include "hash.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -143,6 +144,8 @@ static Entry *list_directory_win(const char *dir_path, const char *rel_dir) {
         if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0)
             continue;
 
+        int is_symlink = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ? 1 : 0;
+
         /* determine if entry is hidden */
         int is_hidden = (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) ? 1 : 0;
         if (fd.cFileName[0] == L'.') is_hidden = 1;
@@ -177,18 +180,20 @@ static Entry *list_directory_win(const char *dir_path, const char *rel_dir) {
         e->is_dir = is_dir;
         e->mtime = 0;
         e->size = 0;
-        e->line_count = 0;
+        e->line_count = is_symlink ? LINES_SYMLINK : 0;
         e->change_time = 0;
 
-        /* get mtime/size via wide-char stat */
-        wchar_t *wfull = utf8_to_wide(full_path);
-        if (wfull) {
-            stat_t st;
-            if (file_stat(wfull, &st) == 0) {
-                e->mtime = st.st_mtime;
-                e->size = st.st_size;
+        /* get mtime/size via wide-char stat (skip for symlinks) */
+        if (!is_symlink) {
+            wchar_t *wfull = utf8_to_wide(full_path);
+            if (wfull) {
+                stat_t st;
+                if (file_stat(wfull, &st) == 0) {
+                    e->mtime = st.st_mtime;
+                    e->size = st.st_size;
+                }
+                free(wfull);
             }
-            free(wfull);
         }
         free(full_path);
 
@@ -241,6 +246,12 @@ static Entry *list_directory_unix(const char *dir_path, const char *rel_dir) {
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
             continue;
 
+        /* determine if entry is a symlink */
+        int is_symlink = 0;
+#ifdef _DIRENT_HAVE_D_TYPE
+        is_symlink = (de->d_type == DT_LNK) ? 1 : 0;
+#endif
+
         /* determine if entry is hidden (dot-prefix) */
         int is_hidden = (de->d_name[0] == '.') ? 1 : 0;
 
@@ -269,9 +280,10 @@ static Entry *list_directory_unix(const char *dir_path, const char *rel_dir) {
 
         e->name = strdup(de->d_name);
         e->is_dir = is_dir;
-        get_file_info(full_path, &e->mtime, &e->size);
-        e->line_count = 0;
+        e->line_count = is_symlink ? LINES_SYMLINK : 0;
         e->change_time = 0;
+        if (!is_symlink)
+            get_file_info(full_path, &e->mtime, &e->size);
 
         free(full_path);
 
@@ -352,7 +364,7 @@ static Entry *scan_internal(const char *path, const char *rel_dir, int depth) {
     root->child = children;
 
     for (Entry *e = children; e; e = e->next) {
-        if (e->is_dir) {
+        if (e->is_dir && e->line_count != LINES_SYMLINK) {
             if (depth + 1 >= max_depth) {
                 e->line_count = LINES_MAXDEPTH;
             } else {
@@ -402,6 +414,7 @@ void free_entries(Entry *e) {
     free_entries(e->next);
     free_entries(e->child);
     free(e->name);
+    free(e->sha1);
     free(e);
 }
 
@@ -417,6 +430,7 @@ static Entry *clone_entry(const Entry *src) {
     e->mtime = src->mtime;
     e->line_count = src->line_count;
     e->size = src->size;
+    e->sha1 = src->sha1 ? strdup(src->sha1) : NULL;
     e->change_time = src->change_time;
     e->change_type = src->change_type;
     e->next = NULL;
@@ -538,8 +552,16 @@ static void collect_by_type(Entry *e, int wanted_type,
     collect_by_type(e->next, wanted_type, arr, count, cap);
 }
 
+/* count total entries in tree (excluding root) */
+static int count_tree_entries(Entry *e) {
+    if (!e) return 0;
+    int n = 1;
+    for (Entry *c = e->child; c; c = c->next) n += count_tree_entries(c);
+    for (Entry *s = e->next; s; s = s->next) n += count_tree_entries(s);
+    return n;
+}
+
 static void match_renames(Entry *root) {
-    /* collect deleted entries (old name) and created entries (new name) */
     MatchEntry *deleted = NULL, *created = NULL;
     int nd = 0, nc = 0, cap = 0;
 
@@ -547,8 +569,7 @@ static void match_renames(Entry *root) {
     cap = 0;
     collect_by_type(root, CHANGE_CREATED, &created, &nc, &cap);
 
-    /* match by size + mtime + line_count: same size, same mtime, same type
-     * (file/dir), and same line count (for non-binary files) → rename. */
+    /* ---- four-factor check (fast path) ---- */
     for (int d = 0; d < nd; d++) {
         if (deleted[d].used) continue;
         for (int c = 0; c < nc; c++) {
@@ -568,8 +589,103 @@ static void match_renames(Entry *root) {
         }
     }
 
+    /* ---- SHA-1 hash fallback ---- */
+    Config *cfg = config_get();
+    if (!cfg || !cfg->hash_enabled) goto done;
+
+    /* check file count limit */
+    {
+        int total = count_tree_entries(root);
+        if (cfg->hash_max_files > 0 && total > cfg->hash_max_files) goto done;
+    }
+
+    /* compare SHA-1 of remaining unmatched entries */
+    for (int d = 0; d < nd; d++) {
+        if (deleted[d].used || deleted[d].entry->is_dir) continue;
+        if (!deleted[d].entry->sha1) continue;
+        for (int c = 0; c < nc; c++) {
+            if (created[c].used || created[c].entry->is_dir) continue;
+            if (!created[c].entry->sha1) continue;
+            if (strcmp(deleted[d].entry->sha1, created[c].entry->sha1) == 0) {
+                deleted[d].entry->change_type = CHANGE_RENAMED;
+                created[c].entry->change_type = CHANGE_RENAMED;
+                deleted[d].used = 1;
+                created[c].used = 1;
+                break;
+            }
+        }
+    }
+
+done:
     free(deleted);
     free(created);
+}
+
+/* ---- post-scan SHA-1 hashing ---- */
+
+static void collect_hash_jobs(Entry *e, const char *parent_path,
+                               HashJob **jobs, int *count, int *cap,
+                               long max_size) {
+    if (!e) return;
+    char *full = make_path(parent_path, e->name);
+    if (!full) return;
+
+    /* add job for this file if eligible */
+    if (!e->is_dir && e->line_count != LINES_BINARY &&
+        (max_size == 0 || e->size <= max_size)) {
+        if (*count >= *cap) {
+            *cap = *cap ? *cap * 2 : 64;
+            *jobs = realloc(*jobs, *cap * sizeof(HashJob));
+        }
+        (*jobs)[*count].path = strdup(full);
+        (*jobs)[*count].max_size = max_size;
+        (*jobs)[*count].sha1 = NULL;
+        (*jobs)[*count].done = 0;
+        (*jobs)[*count].ctx = e;
+        (*count)++;
+    }
+
+    /* recurse into children with this entry's full path */
+    for (Entry *c = e->child; c; c = c->next)
+        collect_hash_jobs(c, full, jobs, count, cap, max_size);
+
+    free(full);
+}
+
+void scan_hash_files(Entry *root, const char *scan_path) {
+    Config *cfg = config_get();
+    if (!cfg || !cfg->hash_enabled) return;
+
+    int total = 0;
+    for (Entry *c = root->child; c; c = c->next)
+        total += count_tree_entries(c);
+    if (cfg->hash_max_files > 0 && total > cfg->hash_max_files) return;
+
+    long max_size = cfg->hash_max_size_mib > 0
+                    ? (long)cfg->hash_max_size_mib * 1024 * 1024 : 0;
+
+    HashJob *jobs = NULL;
+    int job_count = 0, cap = 0;
+    for (Entry *c = root->child; c; c = c->next)
+        collect_hash_jobs(c, scan_path, &jobs, &job_count, &cap, max_size);
+
+    if (job_count == 0) return;
+
+    hash_pool_start(cfg->hash_threads);
+    hash_pool_submit(jobs, job_count);
+    hash_pool_wait();
+
+    /* store results back to entries */
+    for (int i = 0; i < job_count; i++) {
+        if (jobs[i].sha1) {
+            Entry *e = (Entry *)jobs[i].ctx;
+            free(e->sha1);
+            e->sha1 = jobs[i].sha1;  /* transfer ownership */
+        }
+        free((void *)jobs[i].path);
+    }
+    free(jobs);
+    hash_pool_stop();
 }
 
 /* Build a display tree by merging previous tree with new scan.

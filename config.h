@@ -4,12 +4,16 @@
 /* Default values when config is missing or a field is unset */
 #define DEFAULT_MAX_DEPTH            4
 #define DEFAULT_CHANGE_HIGHLIGHT_SECS 3
-#define DEFAULT_SCAN_INTERVAL_MS     2000
+#define DEFAULT_SCAN_INTERVAL_MS     500
 
 typedef struct {
     int max_depth;
     int change_highlight_secs;
     int scan_interval_ms;
+    int hash_enabled;
+    int hash_max_size_mib;
+    int hash_max_files;
+    int hash_threads;
     char **blacklist;
     int blacklist_count;
     char **whitelist;
