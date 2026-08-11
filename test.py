@@ -129,14 +129,30 @@ def action_rename():
         pass
 
 
+def action_symlink():
+    """Create symlink to an existing file or dir, then remove it."""
+    items = list(all_items())
+    if not items:
+        return action_create_file()
+    root, name, is_dir = random.choice(items)
+    target = os.path.join(root, name)
+    link_path = os.path.join(root, "link_" + rand_name("", "" if is_dir else ".txt"))
+    try:
+        os.symlink(target, link_path, target_is_directory=is_dir)
+        log(f"SYMLINK {link_path} -> {name}")
+    except OSError:
+        pass
+
+
 # ── weighted action table ───────────────────────────────────────────
 
 ACTIONS = [
     (action_create_file,  18),
     (action_create_dir,   12),
-    (action_modify,       35),
+    (action_modify,       32),
     (action_delete,       12),
     (action_rename,        8),
+    (action_symlink,       8),
 ]
 
 
